@@ -8,6 +8,7 @@ on:
 env:
   TEMPLATE_OWNER: "chibuka"
   TEMPLATE_REPO: "Hello_World"
+  BACKEND_URL: "https://nine5-ajdi.onrender.com"
 
 jobs:
   test:
@@ -23,11 +24,24 @@ jobs:
         with:
           python-version: '3.11'
       
+      - name: Notify workflow started
+        run: |
+          curl -X POST "${{ env.BACKEND_URL }}/api/submissions/status_update" \
+            -H "Authorization: Bearer ${{ secrets.WEBHOOK_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "user": "${{ github.actor }}",
+              "challenge_type": "hello_world",
+              "status": "in_progress",
+              "message": "🚀 Workflow started - Setting up environment",
+              "github_run_id": "${{ github.run_id }}"
+            }' || echo "Status update failed, continuing..."
+      
       - name: Determine current level
         id: levels
         run: |
           # Fetch the user's current level from the database
-          CURRENT=$(curl -s -X GET "https://nine5-ajdi.onrender.com/api/users/${{ github.actor }}/progress?challenge_id=f9b8c1e2-4d3a-4b2c-8e1f-9a7b6c5d4e3f" \
+          CURRENT=$(curl -s -X GET "${{ env.BACKEND_URL }}/api/users/${{ github.actor }}/progress?challenge_id=3f8a1b2c-9d4e-4f5a-8b1c-2d3e4f5a6b7c" \
             -H "Authorization: Bearer ${{ secrets.WEBHOOK_TOKEN }}" \
             -H "Content-Type: application/json" | jq -r '.current_level')
 
@@ -42,16 +56,66 @@ jobs:
           echo "current=$FOLDER_NAME" >> $GITHUB_OUTPUT
           echo "Current level: $FOLDER_NAME"
       
+      - name: Notify dependencies installation
+        run: |
+          curl -X POST "${{ env.BACKEND_URL }}/api/submissions/status_update" \
+            -H "Authorization: Bearer ${{ secrets.WEBHOOK_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "user": "${{ github.actor }}",
+              "challenge_type": "hello_world",
+              "status": "in_progress",
+              "message": "📦 Installing dependencies...",
+              "github_run_id": "${{ github.run_id }}"
+            }' || echo "Status update failed, continuing..."
+      
       - name: Install dependencies and run tests
         id: test_result
         run: |
           pip install -U pip pytest
+          
+          # Notify that tests are starting
+          curl -X POST "${{ env.BACKEND_URL }}/api/submissions/status_update" \
+            -H "Authorization: Bearer ${{ secrets.WEBHOOK_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "user": "${{ github.actor }}",
+              "challenge_type": "hello_world",
+              "status": "in_progress",
+              "message": "🧪 Running tests for ${{ steps.levels.outputs.current }}...",
+              "github_run_id": "${{ github.run_id }}"
+            }' || echo "Status update failed, continuing..."
+          
           if pytest -q tests/${{ steps.levels.outputs.current }} --tb=short; then
             echo "passed=true" >> $GITHUB_OUTPUT
             echo "✅ Tests passed!"
+            
+            # Notify tests passed
+            curl -X POST "${{ env.BACKEND_URL }}/api/submissions/status_update" \
+              -H "Authorization: Bearer ${{ secrets.WEBHOOK_TOKEN }}" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "user": "${{ github.actor }}",
+                "challenge_type": "hello_world",
+                "status": "in_progress",
+                "message": "✅ Tests passed! Processing results...",
+                "github_run_id": "${{ github.run_id }}"
+              }' || echo "Status update failed, continuing..."
           else
             echo "passed=false" >> $GITHUB_OUTPUT
             echo "❌ Tests failed!"
+            
+            # Notify tests failed
+            curl -X POST "${{ env.BACKEND_URL }}/api/submissions/status_update" \
+              -H "Authorization: Bearer ${{ secrets.WEBHOOK_TOKEN }}" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "user": "${{ github.actor }}",
+                "challenge_type": "hello_world",
+                "status": "failed",
+                "message": "❌ Tests failed",
+                "github_run_id": "${{ github.run_id }}"
+              }' || echo "Status update failed, continuing..."
             exit 1
           fi
 
@@ -70,6 +134,19 @@ jobs:
           echo "next_level=$NEXT" >> $GITHUB_OUTPUT
           echo "Next level: $NEXT"
       
+      - name: Notify level progression
+        run: |
+          curl -X POST "${{ env.BACKEND_URL }}/api/submissions/status_update" \
+            -H "Authorization: Bearer ${{ secrets.WEBHOOK_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "user": "${{ github.actor }}",
+              "challenge_type": "hello_world",
+              "status": "in_progress",
+              "message": "🎉 Unlocking next level: ${{ steps.levels.outputs.next_level }}",
+              "github_run_id": "${{ github.run_id }}"
+            }' || echo "Status update failed, continuing..."
+
       - name: Notify platform about next level
         run: |
           echo "Next level unlocked: ${{ steps.levels.outputs.next_level }}"
@@ -110,8 +187,35 @@ jobs:
           echo "Next Level Unlocked: $NEXT_UNLOCKED"
           echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           
-          # Execute the curl command
-          curl -X POST "https://nine5-ajdi.onrender.com/api/submissions/submission_webhook" \
+          # Final status notification
+          if [[ "${{ needs.test.outputs.passed }}" == "true" ]]; then
+            curl -X POST "${{ env.BACKEND_URL }}/api/submissions/status_update" \
+              -H "Authorization: Bearer ${{ secrets.WEBHOOK_TOKEN }}" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "user": "${{ github.actor }}",
+                "challenge_type": "'$CHALLENGE_TYPE'",
+                "status": "completed",
+                "message": "🎉 Challenge completed successfully!",
+                "github_run_id": "${{ github.run_id }}",
+                "tests_passed": true
+              }' || echo "Status update failed, continuing..."
+          else
+            curl -X POST "${{ env.BACKEND_URL }}/api/submissions/status_update" \
+              -H "Authorization: Bearer ${{ secrets.WEBHOOK_TOKEN }}" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "user": "${{ github.actor }}",
+                "challenge_type": "'$CHALLENGE_TYPE'",
+                "status": "failed",
+                "message": "❌ Challenge failed",
+                "github_run_id": "${{ github.run_id }}",
+                "tests_passed": false
+              }' || echo "Status update failed, continuing..."
+          fi
+          
+          # Execute the final webhook for progress tracking
+          curl -X POST "${{ env.BACKEND_URL }}/api/submissions/submission_webhook" \
             -H "Authorization: Bearer ${{ secrets.WEBHOOK_TOKEN }}" \
             -H "Content-Type: application/json" \
             -H "X-GitHub-Event: ${{ github.event_name }}" \
