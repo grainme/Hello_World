@@ -40,8 +40,20 @@ jobs:
       - name: Determine current level
         id: levels
         run: |
-          # Fetch the user's current level from the database
-          CURRENT=$(curl -s -X GET "${{ env.BACKEND_URL }}/api/users/${{ github.actor }}/progress?challenge_id=3f8a1b2c-9d4e-4f5a-8b1c-2d3e4f5a6b7c" \
+          # First, get the challenge_id dynamically from the backend
+          CHALLENGE_ID=$(curl -s -X GET "${{ env.BACKEND_URL }}/api/challenges/hello_world" \
+            -H "Authorization: Bearer ${{ secrets.WEBHOOK_TOKEN }}" \
+            -H "Content-Type: application/json" | jq -r '.id')
+
+          if [ "$CHALLENGE_ID" == "null" ] || [ -z "$CHALLENGE_ID" ]; then
+            echo "Error: Could not fetch challenge_id for hello_world"
+            exit 1
+          fi
+
+          echo "Challenge ID: $CHALLENGE_ID"
+
+          # Fetch the user's current level from the database using the dynamic challenge_id
+          CURRENT=$(curl -s -X GET "${{ env.BACKEND_URL }}/api/users/${{ github.actor }}/progress?challenge_id=$CHALLENGE_ID" \
             -H "Authorization: Bearer ${{ secrets.WEBHOOK_TOKEN }}" \
             -H "Content-Type: application/json" | jq -r '.current_level')
 
