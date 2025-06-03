@@ -1,0 +1,133 @@
+name: Hello World Challenge Grader
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  TEMPLATE_OWNER: "chibuka"
+  TEMPLATE_REPO: "Hello_World"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    outputs:
+      level: ${{ steps.levels.outputs.current }}
+      passed: ${{ steps.test_result.outputs.passed }}
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Determine current level
+        id: levels
+        run: |
+          # Fetch the user's current level from the database
+          CURRENT=$(curl -s -X GET "https://nine5-ajdi.onrender.com/api/users/${{ github.actor }}/progress?challenge_id=f9b8c1e2-4d3a-4b2c-8e1f-9a7b6c5d4e3f" \
+            -H "Authorization: Bearer ${{ secrets.WEBHOOK_TOKEN }}" \
+            -H "Content-Type: application/json" | jq -r '.current_level')
+
+          # Default to 1 if no progress is found
+          if [ "$CURRENT" == "null" ] || [ -z "$CURRENT" ]; then
+            CURRENT=1
+          fi
+
+          # Convert the integer level to the folder name format (e.g., 1 -> level_01)
+          FOLDER_NAME=$(printf "level_%02d" $CURRENT)
+
+          echo "current=$FOLDER_NAME" >> $GITHUB_OUTPUT
+          echo "Current level: $FOLDER_NAME"
+      
+      - name: Install dependencies and run tests
+        id: test_result
+        run: |
+          pip install -U pip pytest
+          if pytest -q tests/${{ steps.levels.outputs.current }} --tb=short; then
+            echo "passed=true" >> $GITHUB_OUTPUT
+            echo "✅ Tests passed!"
+          else
+            echo "passed=false" >> $GITHUB_OUTPUT
+            echo "❌ Tests failed!"
+            exit 1
+          fi
+
+  unlock_next_level:
+    needs: test
+    if: ${{ needs.test.outputs.passed == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine next level
+        id: levels
+        run: |
+          CURRENT="${{ needs.test.outputs.level }}"
+          NUM=${CURRENT#*_}
+          NEXT_NUM=$((10#$NUM + 1))
+          NEXT=$(printf "level_%02d" $NEXT_NUM)
+          echo "next_level=$NEXT" >> $GITHUB_OUTPUT
+          echo "Next level: $NEXT"
+      
+      - name: Notify platform about next level
+        run: |
+          echo "Next level unlocked: ${{ steps.levels.outputs.next_level }}"
+
+  notify:
+    needs: [test, unlock_next_level]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Notify platform
+        run: |
+          # Extract repo owner and name
+          REPO_OWNER=$(echo "${{ github.repository }}" | cut -d'/' -f1)
+          REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
+          
+          # Determine if next level was unlocked
+          NEXT_UNLOCKED="false"
+          if [[ "${{ needs.unlock_next_level.result }}" == "success" ]]; then
+            NEXT_UNLOCKED="true"
+          fi
+          
+          # Get challenge type from repo name (Hello_World -> hello_world)
+          CHALLENGE_TYPE=$(echo "$REPO_NAME" | tr '[:upper:]' '[:lower:]')
+          
+          # Debugging the variables
+          echo "User: ${{ github.actor }}"
+          echo "Repo Owner: $REPO_OWNER"
+          echo "Repo Name: $REPO_NAME"
+          echo "Repository: ${{ github.repository }}"
+          echo "Challenge Type: $CHALLENGE_TYPE"
+          echo "Level: ${{ needs.test.outputs.level }}"
+          echo "Status: ${{ needs.test.result }}"
+          echo "Tests Passed: ${{ needs.test.outputs.passed }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Commit Message: ${{ github.event.head_commit.message }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Event Type: ${{ github.event_name }}"
+          echo "Next Level Unlocked: $NEXT_UNLOCKED"
+          echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          
+          # Execute the curl command
+          curl -X POST "https://nine5-ajdi.onrender.com/api/submissions/submission_webhook" \
+            -H "Authorization: Bearer ${{ secrets.WEBHOOK_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: ${{ github.event_name }}" \
+            -d '{
+              "user": "${{ github.actor }}",
+              "repo_owner": "'$REPO_OWNER'",
+              "repo_name": "'$REPO_NAME'", 
+              "repo": "${{ github.repository }}",
+              "challenge_type": "'$CHALLENGE_TYPE'",
+              "level": "${{ needs.test.outputs.level }}",
+              "status": "${{ needs.test.result }}",
+              "tests_passed": "${{ needs.test.outputs.passed }}",
+              "commit": "${{ github.sha }}",
+              "commit_message": "${{ github.event.head_commit.message }}",
+              "branch": "${{ github.ref_name }}",
+              "event_type": "${{ github.event_name }}",
+              "next_level_unlocked": "'$NEXT_UNLOCKED'",
+              "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
+            }' || echo "Webhook notification failed, continuing..."
